@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildSpec,
+  fromBytes32,
+  hashTransferSpec,
+  toBytes32,
+  ZERO_BYTES32,
+} from "../lib/gateway";
+import { GATEWAY } from "../lib/constants";
+
+const WALLET = "0x0077777d7EBA4688BDeF3E311b846F25870A19B9";
+const MINTER = "0x0022222ABE238Cc2C7Bb1f21003F0a260052475B";
+const ARC_USDC = "0x3600000000000000000000000000000000000000";
+const DONOR = "0xCfc8A7C5227e078ef5FeAA3d0DE9457B479b6aBd";
+const SALT = "0x" + "00".repeat(31) + "01";
+
+describe("address padding", () => {
+  it("pads a 20-byte address to bytes32 and back", () => {
+    const padded = toBytes32(DONOR);
+    expect(padded).toBe(
+      "0x000000000000000000000000cfc8a7c5227e078ef5feaa3d0de9457b479b6abd",
+    );
+    expect(fromBytes32(padded)).toBe(DONOR.toLowerCase());
+  });
+
+  it("rejects a non-address", () => {
+    expect(() => toBytes32("USDC")).toThrow();
+    expect(() => toBytes32("0x1234")).toThrow();
+  });
+});
+
+describe("burn intent spec", () => {
+  it("is Arc Testnet end-to-end: sourceDomain 26 -> destinationDomain 26", () => {
+    const spec = buildSpec({
+      depositor: DONOR,
+      recipient: DONOR,
+      valueBase: "1000000",
+      salt: SALT,
+      walletContract: WALLET,
+      minterContract: MINTER,
+    });
+    expect(spec.sourceDomain).toBe(26);
+    expect(spec.destinationDomain).toBe(26);
+    expect(spec.sourceDomain).toBe(GATEWAY.domain);
+    // No Sepolia anywhere: domain 0 must never appear.
+    expect(spec.sourceDomain).not.toBe(0);
+    expect(spec.destinationDomain).not.toBe(0);
+    expect(spec.sourceToken).toBe(toBytes32(ARC_USDC));
+    expect(spec.destinationToken).toBe(toBytes32(ARC_USDC));
+    expect(spec.destinationCaller).toBe(ZERO_BYTES32);
+  });
+
+  it("hashes the TransferSpec exactly like Circle's live estimate", () => {
+    // Ground truth: live POST /v1/estimate (enableForwarder=true) for this
+    // exact spec returned transferSpecHash
+    // 0x7f8b8e25bdcd081c3f6c237e027306496919ef4a038a43fed1455dd2fd615c29
+    // (verified 2026-11-05, domain 26 -> 26, value 1,000,000 base units).
+    const spec = buildSpec({
+      depositor: DONOR,
+      recipient: DONOR,
+      valueBase: "1000000",
+      salt: SALT,
+      walletContract: WALLET,
+      minterContract: MINTER,
+    });
+    expect(hashTransferSpec(spec)).toBe(
+      "0x7f8b8e25bdcd081c3f6c237e027306496919ef4a038a43fed1455dd2fd615c29",
+    );
+  });
+});
