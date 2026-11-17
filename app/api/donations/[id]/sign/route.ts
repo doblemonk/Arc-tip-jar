@@ -46,13 +46,6 @@ export async function POST(
       { status: 409 },
     );
   }
-  if (!donation.donorAddress || !donation.maxFeeBase || !donation.maxBlockHeight) {
-    return NextResponse.json(
-      { error: "Donation has no prepared intent yet — call prepare first." },
-      { status: 409 },
-    );
-  }
-
   const now = new Date().toISOString();
   const apiKey = process.env.CIRCLE_API_KEY;
 
@@ -72,6 +65,14 @@ export async function POST(
       donation: updated,
       note: "Simulated signing (no wallet in this browser). This is a demo path — no real transfer was submitted.",
     });
+  }
+
+  // Real path only: the simulated path above needs no wallet and no intent.
+  if (!donation.donorAddress || !donation.maxFeeBase || !donation.maxBlockHeight) {
+    return NextResponse.json(
+      { error: "Donation has no prepared intent yet — call prepare first." },
+      { status: 409 },
+    );
   }
 
   const signature = String(body.signature ?? "").trim();

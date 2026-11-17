@@ -96,7 +96,7 @@ creator setup use **River** — not a built-in fallback:
 
 ## Storage
 
-Vercel KV (`@vercel/kv`) is primary, configured from `KV_REST_API_URL` /
+Upstash Redis (`@upstash/redis`) is primary, configured from `KV_REST_API_URL` /
 `KV_REST_API_TOKEN`. Without them the app falls back to ephemeral
 in-memory storage and shows a **visible warning banner** — donations do
 not survive a redeploy or cold start. It never silently loses data.
@@ -114,8 +114,8 @@ a real `.env.local`.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DASHBOARD_PIN` | Yes | Dashboard PIN (takes precedence over the in-app PIN). |
-| `KV_REST_API_URL` | Recommended | Vercel KV / Upstash Redis REST URL. |
-| `KV_REST_API_TOKEN` | Recommended | Vercel KV / Upstash Redis REST token. |
+| `KV_REST_API_URL` | Recommended | Upstash Redis REST URL. |
+| `KV_REST_API_TOKEN` | Recommended | Upstash Redis REST token. |
 | `CIRCLE_API_KEY` | Optional | Testnet Circle API key — only for real `POST /v1/transfer` submission. Without it, donations stay `processing` until a webhook finalizes them. |
 | `CIRCLE_WEBHOOK_SIGNING_KEY` | Prod only | PEM EC public key to verify `X-Circle-Signature`. Without it, signature verification is skipped (development mode) and the webhook logs a warning. |
 | `RIVER_API_KEY` | For live AI | River API key for live thank-you / polish calls. Without it, saved River defaults are used (labelled). |
@@ -140,7 +140,7 @@ npm start                    # serve the production build
    repository, and select this folder as the project root if it is not
    the repo root. Framework preset: **Next.js**. No build-command changes
    are needed (`npm run build`).
-3. **Storage → Create → KV** (Upstash Redis) and attach it to the
+3. **Storage → Create → Upstash Redis** and attach it to the
    project. Vercel fills `KV_REST_API_URL` / `KV_REST_API_TOKEN`
    automatically.
 4. **Settings → Environment Variables**: set `DASHBOARD_PIN` (required).
@@ -165,7 +165,7 @@ npm start                    # serve the production build
 ## Pre-publish checklist
 
 - [ ] `DASHBOARD_PIN` is set (env var or in-app setup).
-- [ ] Vercel KV is attached (no "ephemeral storage" warning banner).
+- [ ] Upstash Redis is attached (no "ephemeral storage" warning banner).
 - [ ] Creator profile is **yours** (name, your Arc Testnet recipient
       address, thank-you message) — not the test profile.
 - [ ] Test data is cleaned: Dashboard → "Remove Test Lab data" (PIN),

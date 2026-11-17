@@ -268,7 +268,7 @@ export default function TipFlow({
     <div>
       {storageMode === "memory" && (
         <div className="banner warn">
-          Storage warning: Vercel KV is not configured, so this deployment
+          Storage warning: Upstash Redis is not configured, so this deployment
           uses ephemeral in-memory storage. Donations will not survive a
           redeploy or a cold start. Set KV_REST_API_URL and KV_REST_API_TOKEN
           in Vercel to fix this.

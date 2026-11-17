@@ -226,7 +226,7 @@ export default function Dashboard() {
         <h1>Creator dashboard</h1>
         {data.storage === "memory" && (
           <div className="banner warn">
-            Storage warning: Vercel KV is not configured — this deployment
+            Storage warning: Upstash Redis is not configured — this deployment
             uses ephemeral in-memory storage.
           </div>
         )}
