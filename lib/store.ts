@@ -1,7 +1,7 @@
 import type { CreatorProfile, Donation, WebhookEvent } from "./types";
 
 // ---------------------------------------------------------------------------
-// Storage: Vercel KV when configured, otherwise clearly-labelled ephemeral
+// Storage: Upstash Redis when configured, otherwise clearly-labelled ephemeral
 // in-memory storage. Memory mode NEVER pretends to persist: the app shows a
 // warning banner and README documents it. No data is ever lost silently.
 // ---------------------------------------------------------------------------
@@ -17,9 +17,12 @@ export function isKvConfigured(): boolean {
 }
 
 async function kvClient() {
-  // Dynamic import so memory mode never touches the KV SDK at all.
-  const mod = await import("@vercel/kv");
-  return mod.kv;
+  // Dynamic import so memory mode never touches the Redis SDK at all.
+  const { Redis } = await import("@upstash/redis");
+  return new Redis({
+    url: process.env.KV_REST_API_URL as string,
+    token: process.env.KV_REST_API_TOKEN as string,
+  });
 }
 
 // --- in-memory fallback (per server instance; lost on redeploy/cold start) ---
@@ -67,8 +70,13 @@ export async function nextDonationId(): Promise<number> {
 export async function saveDonation(d: Donation): Promise<void> {
   if (isKvConfigured()) {
     const kv = await kvClient();
-    await kv.set(K.donation(d.id), d);
-    const ids = (await kv.get<number[]>(K.donationIds)) ?? [];
+    // One round trip for the write + the id list (each call is a network hop).
+    const [, current] = await kv
+      .pipeline()
+      .set(K.donation(d.id), d)
+      .get(K.donationIds)
+      .exec<[unknown, number[] | null]>();
+    const ids = current ?? [];
     if (!ids.includes(d.id)) {
       ids.push(d.id);
       await kv.set(K.donationIds, ids);
@@ -89,11 +97,12 @@ export async function listDonations(): Promise<Donation[]> {
   if (isKvConfigured()) {
     const kv = await kvClient();
     const ids = (await kv.get<number[]>(K.donationIds)) ?? [];
-    const out: Donation[] = [];
-    for (const id of ids) {
-      const d = await kv.get<Donation>(K.donation(id));
-      if (d) out.push(d);
-    }
+    if (ids.length === 0) return [];
+    // Single batched read instead of one request per donation.
+    const rows = await kv.mget<(Donation | null)[]>(
+      ...ids.map((id) => K.donation(id)),
+    );
+    const out = rows.filter((d): d is Donation => d != null);
     return out.sort((a, b) => b.id - a.id);
   }
   return [...mem.donations.values()].sort((a, b) => b.id - a.id);
@@ -123,9 +132,9 @@ export async function recordWebhookEvent(
 ): Promise<"new" | "duplicate"> {
   if (isKvConfigured()) {
     const kv = await kvClient();
-    const existing = await kv.get<WebhookEvent>(K.webhook(ev.notificationId));
-    if (existing) return "duplicate";
-    await kv.set(K.webhook(ev.notificationId), ev);
+    // SET NX: atomic duplicate check + write in one round trip.
+    const written = await kv.set(K.webhook(ev.notificationId), ev, { nx: true });
+    if (written === null) return "duplicate";
     const order = (await kv.get<string[]>(K.webhookOrder)) ?? [];
     order.push(ev.notificationId);
     await kv.set(K.webhookOrder, order);
@@ -150,11 +159,11 @@ export async function listWebhookEvents(): Promise<WebhookEvent[]> {
   if (isKvConfigured()) {
     const kv = await kvClient();
     const order = (await kv.get<string[]>(K.webhookOrder)) ?? [];
-    const out: WebhookEvent[] = [];
-    for (const id of order) {
-      const ev = await kv.get<WebhookEvent>(K.webhook(id));
-      if (ev) out.push(ev);
-    }
+    if (order.length === 0) return [];
+    const rows = await kv.mget<(WebhookEvent | null)[]>(
+      ...order.map((id) => K.webhook(id)),
+    );
+    const out = rows.filter((ev): ev is WebhookEvent => ev != null);
     return out.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   }
   return [...mem.webhooks.values()].sort((a, b) =>
@@ -173,33 +182,37 @@ export async function deleteTestData(): Promise<{
   let removedEvents = 0;
   if (isKvConfigured()) {
     const kv = await kvClient();
-    for (const id of testIds) {
-      await kv.del(K.donation(id));
-      removedDonations++;
+    if (testIds.length > 0) {
+      await kv.del(...testIds.map((id) => K.donation(id)));
+      removedDonations = testIds.length;
     }
     const ids = (await kv.get<number[]>(K.donationIds)) ?? [];
     await kv.set(
       K.donationIds,
       ids.filter((id) => !testIds.includes(id)),
     );
-    const events = await listWebhookEvents();
     const testTransferIds = new Set(
       all.filter((d) => d.isTest).map((d) => d.transferId),
     );
     const order = (await kv.get<string[]>(K.webhookOrder)) ?? [];
     const keep: string[] = [];
-    for (const nid of order) {
-      const ev = await kv.get<WebhookEvent>(K.webhook(nid));
-      if (
-        ev &&
-        ev.transferId &&
-        testTransferIds.has(ev.transferId)
-      ) {
-        await kv.del(K.webhook(nid));
-        removedEvents++;
-      } else if (ev) {
-        keep.push(nid);
-      }
+    const drop: string[] = [];
+    if (order.length > 0) {
+      const rows = await kv.mget<(WebhookEvent | null)[]>(
+        ...order.map((nid) => K.webhook(nid)),
+      );
+      order.forEach((nid, i) => {
+        const ev = rows[i];
+        if (ev && ev.transferId && testTransferIds.has(ev.transferId)) {
+          drop.push(nid);
+        } else if (ev) {
+          keep.push(nid);
+        }
+      });
+    }
+    if (drop.length > 0) {
+      await kv.del(...drop.map((nid) => K.webhook(nid)));
+      removedEvents = drop.length;
     }
     await kv.set(K.webhookOrder, keep);
     return { removedDonations, removedEvents };
