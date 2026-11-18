@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyFeeMargin,
   buildBurnIntent,
   buildSpec,
   fromBytes32,
@@ -104,5 +105,13 @@ describe("burn intent spec", () => {
     ]);
     expect(td.types.TransferSpec).toBeDefined();
     expect(td.types.BurnIntent).toBeDefined();
+  });
+
+  it("margins the signed maxFee cap 25% over the estimate", () => {
+    // 2026-11-18: estimate maxFee 19331, transfer required 21539 (short
+    // 2208, ~11%). The cap is rounded up, never down.
+    expect(applyFeeMargin("19331")).toBe("24164");
+    expect(applyFeeMargin("100")).toBe("125");
+    expect(applyFeeMargin("0")).toBe("0");
   });
 });
