@@ -117,7 +117,7 @@ a real `.env.local`.
 | `KV_REST_API_URL` | Recommended | Upstash Redis REST URL. |
 | `KV_REST_API_TOKEN` | Recommended | Upstash Redis REST token. |
 | `CIRCLE_API_KEY` | Optional | Testnet Circle API key — only for real `POST /v1/transfer` submission. Without it, donations stay `processing` until a webhook finalizes them. |
-| `CIRCLE_WEBHOOK_SIGNING_KEY` | Prod only | PEM EC public key to verify `X-Circle-Signature`. Without it, signature verification is skipped (development mode) and the webhook logs a warning. |
+| `CIRCLE_WEBHOOK_SIGNING_KEY` | Optional override | PEM EC public key to verify `X-Circle-Signature`. Normally not needed: with `CIRCLE_API_KEY` set, the app fetches Circle's public key itself (GET `/v2/notifications/publicKey/{keyId}`, cached). Without either, verification is skipped (development mode) and the webhook logs a warning. |
 | `RIVER_API_KEY` | For live AI | River API key for live thank-you / polish calls. Without it, saved River defaults are used (labelled). |
 | `RIVER_MODEL` | Optional | Default `deepseek-ai/DeepSeek-V4.1-Flash`. |
 
@@ -145,9 +145,10 @@ npm start                    # serve the production build
    automatically.
 4. **Settings → Environment Variables**: set `DASHBOARD_PIN` (required).
    Optionally set `CIRCLE_API_KEY` (testnet key, for real transfer
-   submission), `CIRCLE_WEBHOOK_SIGNING_KEY` (PEM public key, for
-   webhook verification in production), `RIVER_API_KEY` and `RIVER_MODEL`
-   (for live AI copy).
+   submission and automatic webhook signature verification),
+   `CIRCLE_WEBHOOK_SIGNING_KEY` (PEM public key — only as an override;
+   normally the app fetches Circle's key itself), `RIVER_API_KEY` and
+   `RIVER_MODEL` (for live AI copy).
 5. **Deploy.** Open the deployment URL and check the home page loads.
 6. **Custom domain** (optional): **Settings → Domains → Add** your
    domain and follow Vercel's DNS instructions.
@@ -177,9 +178,10 @@ npm start                    # serve the production build
 - [ ] If you want real Gateway transfers (not just webhook simulation),
       `CIRCLE_API_KEY` (testnet) is set; otherwise the app honestly
       reports submission as disabled.
-- [ ] If you subscribed the Circle webhook, `CIRCLE_WEBHOOK_SIGNING_KEY`
-      is set so signatures are verified (otherwise verification is
-      skipped and logged).
+- [ ] If you subscribed the Circle webhook, signatures are verified:
+      with `CIRCLE_API_KEY` set the app fetches Circle's public key
+      itself (a `CIRCLE_WEBHOOK_SIGNING_KEY` PEM is only an override).
+      Without either, verification is skipped and logged.
 - [ ] `RIVER_API_KEY` is set if you want live AI thank-you messages;
       otherwise the saved River defaults are used and labelled as such.
 - [ ] No `.env.local` or secret was committed (`git status` is clean of

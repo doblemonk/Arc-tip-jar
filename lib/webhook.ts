@@ -1,4 +1,4 @@
-import { createVerify } from "crypto";
+import { createPublicKey, createVerify, type KeyObject } from "crypto";
 import { GATEWAY } from "./constants";
 import {
   findDonationByTransfer,
@@ -336,41 +336,68 @@ export async function processWebhookEvent(
 
 // ---------------------------------------------------------------------------
 // Webhook signature verification (X-Circle-Signature, ECDSA SHA-256 over the
-// raw body). The public key comes from CIRCLE_WEBHOOK_SIGNING_KEY (PEM).
-// When no key is configured verification is SKIPPED (dev mode) — the caller
-// must log that clearly and never claim the event was verified.
+// raw body). The public key comes from one of two places, in order:
+//   1. CIRCLE_WEBHOOK_SIGNING_KEY (PEM) — an explicit override, kept for
+//      tests and manual setups.
+//   2. Circle's public-key endpoint GET /v2/notifications/publicKey/{keyId}
+//      (Bearer CIRCLE_API_KEY), using the X-Circle-Key-Id header. A key is
+//      static per keyId, so it is fetched once and cached in memory.
+// Verification is SKIPPED (dev mode) only when no key material exists at
+// all — no PEM, and no API key to fetch with. Whenever verification is
+// possible it is enforced: a missing signature/keyId, an unresolvable key,
+// or an invalid signature is rejected (401). The caller must log a skip
+// clearly and never claim the event was verified.
 // ---------------------------------------------------------------------------
 
-export function verifyWebhookSignature(args: {
-  rawBody: Buffer;
-  signatureB64: string | null;
-  keyId: string | null;
-}): { ok: boolean; skipped: boolean; reason: string } {
-  const pemRaw = process.env.CIRCLE_WEBHOOK_SIGNING_KEY;
-  if (!pemRaw) {
-    return {
-      ok: false,
-      skipped: true,
-      reason:
-        "No CIRCLE_WEBHOOK_SIGNING_KEY configured — signature verification skipped (development mode).",
-    };
-  }
-  if (!args.signatureB64) {
-    return { ok: false, skipped: false, reason: "Missing X-Circle-Signature header." };
-  }
+// Cache of Circle public keys by keyId (module-level; a key is static per
+// keyId, so one fetch suffices until it rotates).
+const circlePublicKeyCache = new Map<string, KeyObject>();
+
+async function getCirclePublicKey(keyId: string): Promise<KeyObject | null> {
+  const cached = circlePublicKeyCache.get(keyId);
+  if (cached) return cached;
+  const apiKey = process.env.CIRCLE_API_KEY;
+  if (!apiKey) return null;
   try {
-    const pem = pemRaw.replace(/\\n/g, "\n");
+    const res = await fetch(
+      `https://api.circle.com/v2/notifications/publicKey/${encodeURIComponent(keyId)}`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: { publicKey?: unknown; algorithm?: unknown };
+    };
+    const b64 = json?.data?.publicKey;
+    if (typeof b64 !== "string" || !b64) return null;
+    const key = createPublicKey({
+      key: Buffer.from(b64, "base64"),
+      format: "der",
+      type: "spki",
+    });
+    circlePublicKeyCache.set(keyId, key);
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+function verifyWithKey(
+  args: { rawBody: Buffer; signatureB64: string; keyId: string | null },
+  key: KeyObject | string,
+  source: string,
+): { ok: boolean; skipped: boolean; reason: string } {
+  try {
     const verifier = createVerify("SHA256");
     verifier.update(args.rawBody);
     const ok = verifier.verify(
-      pem,
+      key,
       Buffer.from(args.signatureB64, "base64"),
     );
     return {
       ok,
       skipped: false,
       reason: ok
-        ? `Signature verified (key id ${args.keyId ?? "unknown"}).`
+        ? `Signature verified (${source}, key id ${args.keyId ?? "unknown"}).`
         : "Signature verification failed.",
     };
   } catch (err) {
@@ -380,6 +407,72 @@ export function verifyWebhookSignature(args: {
       reason: `Signature verification error: ${(err as Error).message}`,
     };
   }
+}
+
+export async function verifyWebhookSignature(args: {
+  rawBody: Buffer;
+  signatureB64: string | null;
+  keyId: string | null;
+}): Promise<{ ok: boolean; skipped: boolean; reason: string }> {
+  const pemRaw = process.env.CIRCLE_WEBHOOK_SIGNING_KEY;
+  const apiKey = process.env.CIRCLE_API_KEY;
+
+  // Production path: with a Circle API key we can always fetch the public
+  // key for the event's keyId, so verification is enforced — a missing
+  // signature/keyId or an unresolvable key is a rejection, not a skip.
+  if (!pemRaw && apiKey) {
+    if (!args.signatureB64) {
+      return {
+        ok: false,
+        skipped: false,
+        reason: "Missing X-Circle-Signature header.",
+      };
+    }
+    if (!args.keyId) {
+      return {
+        ok: false,
+        skipped: false,
+        reason: "Missing X-Circle-Key-Id header.",
+      };
+    }
+    const key = await getCirclePublicKey(args.keyId);
+    if (!key) {
+      return {
+        ok: false,
+        skipped: false,
+        reason: `Could not fetch Circle public key for key id ${args.keyId}.`,
+      };
+    }
+    return verifyWithKey(
+      { ...args, signatureB64: args.signatureB64 },
+      key,
+      `Circle public key ${args.keyId}`,
+    );
+  }
+
+  // Explicit PEM override (tests, manual setups).
+  if (pemRaw) {
+    if (!args.signatureB64) {
+      return {
+        ok: false,
+        skipped: false,
+        reason: "Missing X-Circle-Signature header.",
+      };
+    }
+    return verifyWithKey(
+      { ...args, signatureB64: args.signatureB64 },
+      pemRaw.replace(/\\n/g, "\n"),
+      "configured signing key",
+    );
+  }
+
+  // No key material at all (development mode).
+  return {
+    ok: false,
+    skipped: true,
+    reason:
+      "No signing key available — signature verification skipped (development mode).",
+  };
 }
 
 export async function getDonationById(id: number): Promise<Donation | null> {

@@ -277,13 +277,13 @@ export async function POST(req: Request) {
         JSON.stringify({ notificationId: "testlab-sig" }),
       );
       const sig = sign("SHA256", payload, privateKey).toString("base64");
-      const good = verifyWebhookSignature({
+      const good = await verifyWebhookSignature({
         rawBody: payload,
         signatureB64: sig,
         keyId: "test-key",
       });
       assert(good.ok, "valid signature must verify");
-      const tampered = verifyWebhookSignature({
+      const tampered = await verifyWebhookSignature({
         rawBody: Buffer.from(JSON.stringify({ notificationId: "tampered" })),
         signatureB64: sig,
         keyId: "test-key",
