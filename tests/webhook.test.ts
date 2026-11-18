@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractEventFields,
   isIgnorableWebhookPayload,
+  normalizeAmountToBaseUnits,
   validateMintFinalized,
   verifyWebhookSignature,
 } from "../lib/webhook";
@@ -85,12 +86,25 @@ describe("validateMintFinalized", () => {
     ).toBe("WRONG_DOMAIN");
   });
 
-  it("rejects a token address where the symbol belongs (the old gap)", () => {
-    // /v1/info publishes only the symbol "USDC" — an address here is wrong.
+  it("accepts the known Arc USDC address (what real Circle events send)", () => {
+    // Real Circle events carry tokenAddress, not the symbol — the known
+    // Arc USDC address normalizes to "USDC" and validates.
     expect(
       validateMintFinalized({
         ev: goodEvent({
           token: "0x3600000000000000000000000000000000000000",
+        }),
+        donation: donation(),
+        creatorRecipient: CREATOR,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an unknown token address", () => {
+    expect(
+      validateMintFinalized({
+        ev: goodEvent({
+          token: "0x0000000000000000000000000000000000000001",
         }),
         donation: donation(),
         creatorRecipient: CREATOR,
@@ -238,6 +252,88 @@ describe("verifyWebhookSignature", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.skipped).toBe(false);
+  });
+});
+
+describe("extractEventFields with the real Circle payload", () => {
+  // Exact payload Circle sent for Tip #82 (notification
+  // 7ce9bd90-a18f-4683-bf9b-6856d2c76112), as stored in the webhook log.
+  const realPayload = {
+    subscriptionId: "eda209bd-eb59-4a8d-a69c-c1b218bb963e",
+    notificationId: "7ce9bd90-a18f-4683-bf9b-6856d2c76112",
+    notificationType: "gateway.mint.finalized",
+    notification: {
+      env: "testnet",
+      domain: "26",
+      txHash:
+        "0xe3fb79ac16f253462fff22f44d992d40e9699b7e214f2500b8e4924d0b9f103c",
+      transferId: "a05e0461-5c2f-4281-a9d0-2d320d24636f",
+      attestations: [
+        {
+          to: "0xdb1691026351ee75f170daddc2ff000382a9feb4",
+          from: "0xdb1691026351ee75f170daddc2ff000382a9feb4",
+          amount: "0.500000",
+          transferSpecHash:
+            "0x9dc329e80b9cc8247adc198c21382721bce1d9cc60ee87798146313009e2c5b5",
+        },
+      ],
+      tokenAddress: "0x3600000000000000000000000000000000000000",
+      wasForwarded: true,
+      walletAddress: "0xdb1691026351ee75f170daddc2ff000382a9feb4",
+    },
+    timestamp: "2026-11-18T07:42:40.568333246Z",
+    version: 2,
+  };
+
+  it("reads the transfer out of the notification envelope", () => {
+    const ev = extractEventFields(realPayload);
+    expect(ev.notificationId).toBe("7ce9bd90-a18f-4683-bf9b-6856d2c76112");
+    expect(ev.notificationType).toBe("gateway.mint.finalized");
+    expect(ev.transferId).toBe("a05e0461-5c2f-4281-a9d0-2d320d24636f");
+    expect(ev.transferSpecHash).toBe(
+      "0x9dc329e80b9cc8247adc198c21382721bce1d9cc60ee87798146313009e2c5b5",
+    );
+    expect(ev.env).toBe("testnet");
+    expect(ev.domain).toBe(26);
+    expect(ev.token).toBe("USDC");
+    expect(ev.amount).toBe("500000");
+    expect(ev.attestations[0].to).toBe(
+      "0xdb1691026351ee75f170daddc2ff000382a9feb4",
+    );
+  });
+
+  it("validates the real event against the matching donation", () => {
+    const ev = extractEventFields(realPayload);
+    expect(
+      validateMintFinalized({
+        ev,
+        donation: donation({
+          id: 82,
+          amountBase: "500000",
+          transferId: "a05e0461-5c2f-4281-a9d0-2d320d24636f",
+          transferSpecHash:
+            "0x9dc329e80b9cc8247adc198c21382721bce1d9cc60ee87798146313009e2c5b5",
+          recipientAddress:
+            "0xDB1691026351EE75f170DaddC2Ff000382a9Feb4",
+        }),
+        creatorRecipient: "0xDB1691026351EE75f170DaddC2Ff000382a9Feb4",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("normalizeAmountToBaseUnits", () => {
+  it("converts Circle decimal USDC strings to base units", () => {
+    expect(normalizeAmountToBaseUnits("0.500000")).toBe("500000");
+    expect(normalizeAmountToBaseUnits("1.000000")).toBe("1000000");
+    expect(normalizeAmountToBaseUnits("10.25")).toBe("10250000");
+    expect(normalizeAmountToBaseUnits("0.000001")).toBe("1");
+  });
+
+  it("passes integer base units through unchanged", () => {
+    expect(normalizeAmountToBaseUnits("500000")).toBe("500000");
+    expect(normalizeAmountToBaseUnits("1000000")).toBe("1000000");
+    expect(normalizeAmountToBaseUnits(null)).toBeNull();
   });
 });
 
