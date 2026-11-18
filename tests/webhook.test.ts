@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { generateKeyPairSync, sign } from "crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractEventFields,
   isIgnorableWebhookPayload,
   validateMintFinalized,
+  verifyWebhookSignature,
 } from "../lib/webhook";
 import type { Donation } from "../lib/types";
 
@@ -125,6 +127,117 @@ describe("validateMintFinalized", () => {
         creatorRecipient: CREATOR,
       }),
     ).toBe("RECIPIENT_MISMATCH");
+  });
+});
+
+describe("verifyWebhookSignature", () => {
+  afterEach(() => {
+    delete process.env.CIRCLE_WEBHOOK_SIGNING_KEY;
+    delete process.env.CIRCLE_API_KEY;
+    vi.unstubAllGlobals();
+  });
+
+  it("verifies a valid signature against the configured PEM key", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "P-256",
+    });
+    process.env.CIRCLE_WEBHOOK_SIGNING_KEY = publicKey.export({
+      type: "spki",
+      format: "pem",
+    }) as string;
+    const payload = Buffer.from(JSON.stringify({ notificationId: "t1" }));
+    const sig = sign("SHA256", payload, privateKey).toString("base64");
+    const good = await verifyWebhookSignature({
+      rawBody: payload,
+      signatureB64: sig,
+      keyId: "k1",
+    });
+    expect(good.ok).toBe(true);
+    const tampered = await verifyWebhookSignature({
+      rawBody: Buffer.from(JSON.stringify({ notificationId: "t2" })),
+      signatureB64: sig,
+      keyId: "k1",
+    });
+    expect(tampered.ok).toBe(false);
+  });
+
+  it("rejects a missing signature when a key is configured", async () => {
+    const { publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "P-256",
+    });
+    process.env.CIRCLE_WEBHOOK_SIGNING_KEY = publicKey.export({
+      type: "spki",
+      format: "pem",
+    }) as string;
+    const res = await verifyWebhookSignature({
+      rawBody: Buffer.from("{}"),
+      signatureB64: null,
+      keyId: "k1",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.skipped).toBe(false);
+  });
+
+  it("skips verification when no key material exists (development mode)", async () => {
+    const res = await verifyWebhookSignature({
+      rawBody: Buffer.from("{}"),
+      signatureB64: null,
+      keyId: null,
+    });
+    expect(res.skipped).toBe(true);
+  });
+
+  it("fetches Circle's public key by keyId, verifies, and caches it", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "P-256",
+    });
+    const derB64 = publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64");
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: {
+          id: "key-1",
+          algorithm: "ECDSA_SHA_256",
+          publicKey: derB64,
+        },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.CIRCLE_API_KEY = "test-api-key";
+    const payload = Buffer.from(JSON.stringify({ notificationId: "t1" }));
+    const sig = sign("SHA256", payload, privateKey).toString("base64");
+    const res = await verifyWebhookSignature({
+      rawBody: payload,
+      signatureB64: sig,
+      keyId: "key-1",
+    });
+    expect(res.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Same keyId again uses the cache — no second fetch.
+    const res2 = await verifyWebhookSignature({
+      rawBody: payload,
+      signatureB64: sig,
+      keyId: "key-1",
+    });
+    expect(res2.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when Circle's key endpoint fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => ({}) })),
+    );
+    process.env.CIRCLE_API_KEY = "test-api-key";
+    const res = await verifyWebhookSignature({
+      rawBody: Buffer.from("{}"),
+      signatureB64: "AAAA",
+      keyId: "key-9",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.skipped).toBe(false);
   });
 });
 

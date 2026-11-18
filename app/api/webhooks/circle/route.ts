@@ -19,11 +19,13 @@ import {
  * GET answers a small status object for manual checks; it never
  * processes events.
  *
- * Signature: when CIRCLE_WEBHOOK_SIGNING_KEY is configured the
- * X-Circle-Signature header (ECDSA SHA-256 over the raw body) is verified
- * and an invalid signature is rejected with 401. Without a key,
- * verification is skipped (development mode) and the event is still
- * processed — the response says so plainly.
+ * Signature: the X-Circle-Signature header (ECDSA SHA-256 over the raw
+ * body) is verified against Circle's public key for the X-Circle-Key-Id,
+ * fetched once from GET /v2/notifications/publicKey/{keyId} and cached;
+ * CIRCLE_WEBHOOK_SIGNING_KEY (PEM) is an optional override. Verification
+ * is enforced whenever a key can be resolved — an invalid or missing
+ * signature is rejected with 401. It is skipped only when no key material
+ * exists at all (development mode), and the response says so plainly.
  * Always 200 for valid events, including duplicates.
  */
 export async function HEAD() {
@@ -57,7 +59,7 @@ export async function POST(req: Request) {
   }
   const signature = req.headers.get("x-circle-signature");
   const keyId = req.headers.get("x-circle-key-id");
-  const check = verifyWebhookSignature({
+  const check = await verifyWebhookSignature({
     rawBody,
     signatureB64: signature,
     keyId,
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
   }
   if (check.skipped) {
     console.warn(
-      "[webhook] Signature verification skipped — CIRCLE_WEBHOOK_SIGNING_KEY is not configured (development mode).",
+      "[webhook] Signature verification skipped — no signing key available (development mode).",
     );
   }
   const result = await processWebhookEvent(payload);
