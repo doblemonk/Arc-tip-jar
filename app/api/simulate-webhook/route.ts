@@ -14,8 +14,8 @@ import { processWebhookEvent } from "@/lib/webhook";
  * discoverability gap where three test donations failed TOKEN_MISMATCH
  * because nobody could tell what token value was expected):
  *   token: "USDC"  — the token SYMBOL as published by GET /v1/info.
- *   /v1/info publishes only symbols (USDC / cirBTC / EURC), never token
- *   addresses, so a contract address here is WRONG and will fail with
+ *   Real Circle events instead send the token contract address; the known
+ *   Arc USDC address is accepted too, any other address fails with
  *   TOKEN_MISMATCH.
  *   env: "testnet"  — anything else fails with WRONG_ENV.
  *   domain: 26      — Arc Testnet; anything else fails with WRONG_DOMAIN.

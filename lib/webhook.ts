@@ -1,5 +1,5 @@
 import { createPublicKey, createVerify, type KeyObject } from "crypto";
-import { GATEWAY } from "./constants";
+import { ARC_USDC_ADDRESS, GATEWAY } from "./constants";
 import {
   findDonationByTransfer,
   getDonation,
@@ -16,24 +16,69 @@ import type {
 
 // ---------------------------------------------------------------------------
 // Circle Gateway webhook processing (POST /webhooks/circle).
-// Canonical event shape (also what the in-app simulator sends):
+//
+// REAL Circle payload (observed 2026-11-18, Tip #82, notification
+// 7ce9bd90-a18f-4683-bf9b-6856d2c76112) — the v2 envelope nests the transfer
+// resource under `notification`, and it differs from the shape the
+// in-app simulator was built on in three ways:
 //   {
-//     "notificationId": "notif-…",            // stable across Circle retries
+//     "subscriptionId": "eda209bd-...",
+//     "notificationId": "7ce9bd90-...",
 //     "notificationType": "gateway.mint.finalized",
-//     "env": "testnet",                        // MUST be testnet
-//     "domain": 26,                           // MUST be 26 (Arc Testnet)
-//     "token": "USDC",                        // token SYMBOL, as published by
-//                                             // GET /v1/info (it publishes no
-//                                             // token addresses — see README)
-//     "amount": "1000000",                    // integer base units (6 decimals)
-//     "transferId": "…",
-//     "transferSpecHash": "0x…",
-//     "attestations": [{ "to": "0x…", "amount": "1000000" }]
+//     "notification": {
+//       "env": "testnet",
+//       "domain": "26",                       // STRING, not a number
+//       "txHash": "0xe3fb...",
+//       "transferId": "a05e0461-...",
+//       "attestations": [{
+//         "to": "0xdb16...", "from": "0xdb16...",
+//         "amount": "0.500000",               // DECIMAL USDC string, NOT
+//                                             // integer base units
+//         "transferSpecHash": "0x9dc329..."   // lives HERE, not top-level
+//       }],
+//       "tokenAddress": "0x3600...0000",      // token ADDRESS, not symbol
+//       "wasForwarded": true,
+//       "walletAddress": "0xdb16..."
+//     },
+//     "timestamp": "2026-11-18T07:42:40Z",
+//     "version": 2
 //   }
+// The extractor below handles BOTH this real shape and the simulator's
+// flat shape (top-level notificationId/notificationType/transferId/
+// transferSpecHash, token "USDC", amount in integer base units).
 // Tolerant aliases are accepted for env/domain/token/amount/transferId so a
 // real Circle payload with a slightly different field layout still validates
 // instead of failing on a field name. Validation itself is strict.
 // ---------------------------------------------------------------------------
+
+/**
+ * Normalize a webhook amount to integer base units (USDC, 6 decimals),
+ * using string math only — never floats. Circle sends decimal USDC
+ * strings ("0.500000"); the simulator and Test Lab send integer base
+ * units ("500000"). A value with a decimal point is decimal USDC and is
+ * converted; a plain integer is already base units and passes through.
+ */
+export function normalizeAmountToBaseUnits(raw: string | null): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (s === "") return null;
+  if (!s.includes(".")) {
+    const n = s.replace(/^0+(?=\d)/, "");
+    return n === "" ? "0" : n;
+  }
+  const [whole, frac = ""] = s.split(".");
+  const frac6 = (frac + "000000").slice(0, 6);
+  const combined = `${whole}${frac6}`.replace(/^0+(?=\d)/, "");
+  return combined === "" ? "0" : combined;
+}
+
+/** Map a known token contract address to its symbol (USDC on Arc Testnet). */
+function normalizeToken(raw: string | null): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (s.toLowerCase() === ARC_USDC_ADDRESS.toLowerCase()) return "USDC";
+  return s;
+}
 
 export interface ExtractedEvent {
   notificationId: string | null;
@@ -49,7 +94,11 @@ export interface ExtractedEvent {
 
 export function extractEventFields(raw: unknown): ExtractedEvent {
   const p = (raw ?? {}) as Record<string, any>;
-  const nested = (p.data ?? p.payload ?? p.event ?? {}) as Record<string, any>;
+  const nested = (p.data ??
+    p.payload ??
+    p.event ??
+    p.notification ??
+    {}) as Record<string, any>;
   const pick = (...keys: string[]) => {
     for (const k of keys) {
       if (p[k] !== undefined && p[k] !== null) return p[k];
@@ -73,7 +122,15 @@ export function extractEventFields(raw: unknown): ExtractedEvent {
         a?.amount != null ? String(a.amount) : null,
     }),
   );
+  // In the real Circle payload the spec hash lives on the first
+  // attestation, not at the top level.
+  const attestSpecHash =
+    (Array.isArray(attestRaw) ? attestRaw[0] : null)?.transferSpecHash ??
+    (Array.isArray(attestRaw) ? attestRaw[0] : null)?.specHash ??
+    null;
   const domainRaw = pick("domain", "domainId", "destinationDomain");
+  const amountRaw =
+    pick("amount", "mintAmount", "value") ?? attestations[0]?.amount ?? null;
   return {
     notificationId: pick("notificationId", "id") != null ? String(pick("notificationId", "id")) : null,
     notificationType:
@@ -81,21 +138,23 @@ export function extractEventFields(raw: unknown): ExtractedEvent {
         ? String(pick("notificationType", "type"))
         : null,
     transferId:
-      pick("transferId") ?? transfer.transferId ?? transfer.id ?? null,
+      pick("transferId") ?? transfer.transferId ?? transfer.id ?? nested.id ?? null,
     transferSpecHash:
       pick("transferSpecHash", "specHash") != null
         ? String(pick("transferSpecHash", "specHash"))
-        : null,
+        : attestSpecHash != null
+          ? String(attestSpecHash)
+          : null,
     env: pick("env", "environment") != null ? String(pick("env", "environment")) : null,
     domain: domainRaw != null ? Number(domainRaw) : null,
     token:
-      pick("token", "tokenSymbol") != null
-        ? String(pick("token", "tokenSymbol"))
-        : null,
+      normalizeToken(
+        pick("token", "tokenSymbol", "tokenAddress") != null
+          ? String(pick("token", "tokenSymbol", "tokenAddress"))
+          : null,
+      ),
     amount:
-      pick("amount", "mintAmount", "value") != null
-        ? String(pick("amount", "mintAmount", "value"))
-        : null,
+      amountRaw != null ? normalizeAmountToBaseUnits(String(amountRaw)) : null,
     attestations,
   };
 }

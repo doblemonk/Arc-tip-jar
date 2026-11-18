@@ -339,8 +339,9 @@ export default function Dashboard() {
         <ul className="small">
           <li>
             <strong>token: &quot;USDC&quot;</strong> — the token SYMBOL as
-            published by GET /v1/info. /v1/info publishes no token addresses,
-            so a contract address here is wrong and fails with TOKEN_MISMATCH.
+            published by GET /v1/info. Real Circle events instead send the
+            token contract address — the known Arc USDC address is accepted
+            too; any other address fails with TOKEN_MISMATCH.
           </li>
           <li><strong>env: &quot;testnet&quot;</strong> — anything else fails with WRONG_ENV.</li>
           <li><strong>domain: 26</strong> — Arc Testnet; anything else fails with WRONG_DOMAIN.</li>
