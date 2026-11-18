@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ARC_TESTNET } from "@/lib/constants";
 import { getDonationChecked } from "@/lib/donations";
 import {
+  applyFeeMargin,
   buildBurnIntent,
   buildSpec,
   estimateFee,
@@ -61,9 +62,14 @@ export async function POST(
       walletContract: arc.walletContract,
       minterContract: arc.minterContract,
     });
+    // Signed maxFee carries a safety margin over the estimate (see
+    // applyFeeMargin): Gateway's forwarding fee can rise between prepare
+    // and submit. The displayed feeTotalUsdc below stays the plain
+    // estimate — only the cap is margined.
+    const maxFeeBase = applyFeeMargin(est.maxFeeBase);
     const { burnIntent, typedData } = buildBurnIntent({
       spec,
-      maxFeeBase: est.maxFeeBase,
+      maxFeeBase,
       maxBlockHeight: est.maxBlockHeight,
     });
     const updated = {
@@ -71,7 +77,7 @@ export async function POST(
       donorAddress,
       donorChainId: ARC_TESTNET.chainId,
       salt,
-      maxFeeBase: est.maxFeeBase,
+      maxFeeBase,
       feeTotalUsdc: est.feeTotalUsdc,
       maxBlockHeight: est.maxBlockHeight,
       transferSpecHash: hashTransferSpec(spec),

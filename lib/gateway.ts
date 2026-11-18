@@ -323,6 +323,27 @@ export async function estimateFee(args: {
   };
 }
 
+/**
+ * Safety margin on the signed maxFee cap.
+ *
+ * Gateway's forwarding fee moves between the estimate (prepare time) and
+ * the transfer (submit time, minutes later while the donor reviews the
+ * wallet prompt). Seen 2026-11-18: estimate maxFee 0.019331 USDC, transfer
+ * required 0.021539 (short 0.002208, ~11%); another attempt was short
+ * 0.000958. maxFee is a CAP the donor authorizes, not the amount charged —
+ * the real fee is whatever Gateway charges, never more than the cap. So the
+ * signed intent carries a 25% margin over the estimate; the displayed fee
+ * estimate stays unmargined (it is informational only).
+ */
+export const MAX_FEE_MARGIN_BPS = 2500; // 25%
+
+export function applyFeeMargin(maxFeeBase: string): string {
+  const fee = BigInt(maxFeeBase);
+  return String(
+    (fee * BigInt(10000 + MAX_FEE_MARGIN_BPS) + 9999n) / 10000n,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Real transfer submission — ONLY when a Circle API key is configured.
 // ---------------------------------------------------------------------------
