@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBurnIntent,
   buildSpec,
   fromBytes32,
   hashTransferSpec,
@@ -66,5 +67,42 @@ describe("burn intent spec", () => {
     expect(hashTransferSpec(spec)).toBe(
       "0x7f8b8e25bdcd081c3f6c237e027306496919ef4a038a43fed1455dd2fd615c29",
     );
+  });
+
+  it("sends wallets an explicit EIP712Domain type (MetaMask fix)", () => {
+    // MetaMask (eth-sig-util) hashes the domain with an EMPTY type
+    // ("EIP712Domain()") when no explicit EIP712Domain type is present, so
+    // it signs a different digest than ethers — the server then rejects the
+    // signature as not matching the donor address (seen 2026-11-18 on tips
+    // #58/#63/#69). The wallet-facing typedData must carry the explicit
+    // type; the server-side verify path (ethers) keeps using EIP712_TYPES
+    // without it, since ethers auto-derives the domain type and rejects an
+    // extra EIP712Domain entry.
+    const spec = buildSpec({
+      depositor: DONOR,
+      recipient: DONOR,
+      valueBase: "1000000",
+      salt: SALT,
+      walletContract: WALLET,
+      minterContract: MINTER,
+    });
+    const { typedData } = buildBurnIntent({
+      spec,
+      maxFeeBase: "19854",
+      maxBlockHeight: "74181140",
+    });
+    const td = typedData as {
+      domain: { name: string; version: string };
+      types: Record<string, { name: string; type: string }[]>;
+      primaryType: string;
+    };
+    expect(td.primaryType).toBe("BurnIntent");
+    expect(td.domain).toEqual({ name: "GatewayWallet", version: "1" });
+    expect(td.types.EIP712Domain).toEqual([
+      { name: "name", type: "string" },
+      { name: "version", type: "string" },
+    ]);
+    expect(td.types.TransferSpec).toBeDefined();
+    expect(td.types.BurnIntent).toBeDefined();
   });
 });
