@@ -120,6 +120,29 @@ export const EIP712_TYPES = {
 } as const;
 
 /**
+ * EIP-712 domain type, sent to wallets as part of `typedData.types`.
+ *
+ * MetaMask (eth-sig-util) hashes the domain with an EMPTY type
+ * ("EIP712Domain()") when no explicit EIP712Domain type is present, so it
+ * signs a different digest than ethers — and the server then rejects the
+ * signature as "does not match the connected donor address". Including the
+ * explicit type makes wallets hash the domain with name+version, exactly
+ * like ethers. ethers itself must NOT receive this type in
+ * verifyTypedData/signTypedData (it auto-derives the domain type and
+ * rejects an extra EIP712Domain entry), so it stays out of EIP712_TYPES.
+ */
+export const EIP712_DOMAIN_TYPE = [
+  { name: "name", type: "string" },
+  { name: "version", type: "string" },
+] as const;
+
+/** Types as wallets expect them: message types + explicit EIP712Domain. */
+export const WALLET_EIP712_TYPES = {
+  EIP712Domain: EIP712_DOMAIN_TYPE,
+  ...EIP712_TYPES,
+} as const;
+
+/**
  * keccak256 hash of the TransferSpec, exactly as Circle computes
  * `transferSpecHash` — and as the on-chain GatewayWallet uses it as the
  * cross-chain id / replay key.
@@ -216,7 +239,7 @@ export function buildBurnIntent(args: {
   };
   const typedData = {
     domain: { ...EIP712_DOMAIN },
-    types: EIP712_TYPES,
+    types: WALLET_EIP712_TYPES,
     primaryType: "BurnIntent",
     message: burnIntent,
   };
