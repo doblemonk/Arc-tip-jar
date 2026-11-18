@@ -100,6 +100,27 @@ export function extractEventFields(raw: unknown): ExtractedEvent {
   };
 }
 
+const KNOWN_GATEWAY_TYPES = [
+  "gateway.deposit.finalized",
+  "gateway.mint.finalized",
+  "gateway.mint.forwarded",
+] as const;
+
+/**
+ * True when a payload is not a recognizable Gateway event: no
+ * notificationId, or a notificationType outside the three Gateway types.
+ * Circle's subscription-validation probe falls here; the public route
+ * answers it 200 (ignored) instead of 400 so the subscription can be
+ * created. Changes no state.
+ */
+export function isIgnorableWebhookPayload(raw: unknown): boolean {
+  const ev = extractEventFields(raw);
+  if (!ev.notificationId) return true;
+  return !(KNOWN_GATEWAY_TYPES as readonly string[]).includes(
+    ev.notificationType as string,
+  );
+}
+
 /**
  * Validate a mint.finalized event against a donation + creator.
  * Returns null when the event is valid, otherwise the failure reason.

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  isIgnorableWebhookPayload,
   processWebhookEvent,
   verifyWebhookSignature,
 } from "@/lib/webhook";
@@ -35,6 +36,25 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const rawBody = Buffer.from(await req.arrayBuffer());
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    return NextResponse.json(
+      { error: "Request body is not valid JSON" },
+      { status: 400 },
+    );
+  }
+  // Payloads that are not recognizable Gateway events — no notificationId,
+  // or a notificationType outside the three Gateway types — get a plain
+  // 200 and change nothing. Circle's subscription-validation probe falls
+  // here, and it only accepts 2XX. This runs before signature
+  // verification on purpose: the probe is unsigned, and a 401 here would
+  // make subscription creation fail even after the signing key is set.
+  // Real Gateway events still go through verification below.
+  if (isIgnorableWebhookPayload(payload)) {
+    return NextResponse.json({ ok: true, ignored: true });
+  }
   const signature = req.headers.get("x-circle-signature");
   const keyId = req.headers.get("x-circle-key-id");
   const check = verifyWebhookSignature({
@@ -51,15 +71,6 @@ export async function POST(req: Request) {
   if (check.skipped) {
     console.warn(
       "[webhook] Signature verification skipped — CIRCLE_WEBHOOK_SIGNING_KEY is not configured (development mode).",
-    );
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(rawBody.toString("utf8"));
-  } catch {
-    return NextResponse.json(
-      { error: "Request body is not valid JSON" },
-      { status: 400 },
     );
   }
   const result = await processWebhookEvent(payload);

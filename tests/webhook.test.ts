@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractEventFields,
+  isIgnorableWebhookPayload,
   validateMintFinalized,
 } from "../lib/webhook";
 import type { Donation } from "../lib/types";
@@ -124,6 +125,44 @@ describe("validateMintFinalized", () => {
         creatorRecipient: CREATOR,
       }),
     ).toBe("RECIPIENT_MISMATCH");
+  });
+});
+
+describe("isIgnorableWebhookPayload", () => {
+  it("ignores an empty payload (Circle's subscription-validation probe)", () => {
+    expect(isIgnorableWebhookPayload({})).toBe(true);
+  });
+
+  it("ignores a payload with no notificationId", () => {
+    expect(
+      isIgnorableWebhookPayload({
+        notificationType: "gateway.mint.finalized",
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores an unknown notification type", () => {
+    expect(
+      isIgnorableWebhookPayload({
+        notificationId: "n1",
+        notificationType: "something.else",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not ignore real Gateway events", () => {
+    for (const t of [
+      "gateway.deposit.finalized",
+      "gateway.mint.finalized",
+      "gateway.mint.forwarded",
+    ]) {
+      expect(
+        isIgnorableWebhookPayload({
+          notificationId: "n1",
+          notificationType: t,
+        }),
+      ).toBe(false);
+    }
   });
 });
 
