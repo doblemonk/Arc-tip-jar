@@ -11,6 +11,13 @@ import {
  * gateway.mint.finalized) and point it at:
  *   https://<your-domain>/api/webhooks/circle
  *
+ * HEAD is required too: Circle validates the endpoint URL with a HEAD
+ * request when a subscription is created or updated, and rejects the
+ * subscription if it does not answer 2XX. (Without this handler the
+ * route answered 405 and no subscription could be created.)
+ * GET answers a small status object for manual checks; it never
+ * processes events.
+ *
  * Signature: when CIRCLE_WEBHOOK_SIGNING_KEY is configured the
  * X-Circle-Signature header (ECDSA SHA-256 over the raw body) is verified
  * and an invalid signature is rejected with 401. Without a key,
@@ -18,6 +25,14 @@ import {
  * processed — the response says so plainly.
  * Always 200 for valid events, including duplicates.
  */
+export async function HEAD() {
+  return new Response(null, { status: 200 });
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: true, endpoint: "circle-webhook" });
+}
+
 export async function POST(req: Request) {
   const rawBody = Buffer.from(await req.arrayBuffer());
   const signature = req.headers.get("x-circle-signature");
